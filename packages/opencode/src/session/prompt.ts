@@ -46,7 +46,7 @@ import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Type
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
-import { Flag } from "@opencode-ai/core/flag/flag"
+import { truthy } from "@opencode-ai/core/flag/flag"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
@@ -1163,7 +1163,7 @@ const layer = Layer.effect(
           const cfg = yield* config.get()
           const isFoldEnabled =
             cfg.experimental?.context_warp_drive?.enabled === true ||
-            Flag.truthy("OPENCODE_CWD_ENABLED")
+            truthy("OPENCODE_CWD_ENABLED")
 
           if (
             !isFoldEnabled &&

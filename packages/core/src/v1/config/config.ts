@@ -179,6 +179,25 @@ export const Info = Schema.Struct({
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
+      context_warp_drive: Schema.optional(
+        Schema.Struct({
+          enabled: Schema.optional(Schema.Boolean).annotate({
+            description: "Enable the context warp drive (default: false)",
+          }),
+          freeze_ttl_ms: Schema.optional(NonNegativeInt).annotate({
+            description: "Freeze cache TTL in milliseconds. 0 disables freeze (recompute every call).",
+          }),
+          pressure_ceiling_tokens: Schema.optional(PositiveInt).annotate({
+            description: "Measured input-token ceiling that triggers a hard epoch recompute.",
+          }),
+          hard_threshold_gap_tokens: Schema.optional(PositiveInt).annotate({
+            description: "Gap between soft and hard char thresholds (only meaningful when continuous is off).",
+          }),
+          max_turns_before_fold: Schema.optional(NonNegativeInt).annotate({
+            description: "Maximum turns before folding regardless of char count. 0 disables the turn-based gate.",
+          }),
+        }),
+      ),
       policies: Schema.optional(Schema.mutable(Schema.Array(ConfigExperimental.Policy))).annotate({
         description: "Policy statements applied to supported resources, such as provider access",
       }),

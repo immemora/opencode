@@ -267,6 +267,15 @@
         "wrangler": "4.50.0",
       },
     },
+    "packages/context-warp-drive": {
+      "name": "@opencode-ai/context-warp-drive",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/core": {
       "name": "@opencode-ai/core",
       "version": "1.17.13",
@@ -578,6 +587,7 @@
         "@octokit/graphql": "9.0.2",
         "@octokit/rest": "catalog:",
         "@openauthjs/openauth": "catalog:",
+        "@opencode-ai/context-warp-drive": "workspace:*",
         "@opencode-ai/llm": "workspace:*",
         "@opencode-ai/plugin": "workspace:*",
         "@opencode-ai/protocol": "workspace:*",
@@ -1934,6 +1944,8 @@
     "@opencode-ai/console-resource": ["@opencode-ai/console-resource@workspace:packages/console/resource"],
 
     "@opencode-ai/console-support": ["@opencode-ai/console-support@workspace:packages/console/support"],
+
+    "@opencode-ai/context-warp-drive": ["@opencode-ai/context-warp-drive@workspace:packages/context-warp-drive"],
 
     "@opencode-ai/core": ["@opencode-ai/core@workspace:packages/core"],
 

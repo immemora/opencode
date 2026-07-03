@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@opencode-ai/context-warp-drive",
+  "version": "0.1.0",
+  "description": "Deterministic, zero-LLM rolling-fold context compaction for function-calling agent sessions",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "tsgo --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./fold": "./src/fold.ts",
+    "./budget": "./src/contextBudget.ts",
+    "./session": "./src/session/FoldSession.ts",
+    "./glyphs": "./src/glyphs.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "@typescript/native-preview": "catalog:"
+  }
+}

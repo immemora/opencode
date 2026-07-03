@@ -46,6 +46,7 @@ import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Type
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
@@ -56,6 +57,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { prepare as foldPrepare } from "./fold"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1158,7 +1160,13 @@ const layer = Layer.effect(
             continue
           }
 
+          const cfg = yield* config.get()
+          const isFoldEnabled =
+            cfg.experimental?.context_warp_drive?.enabled === true ||
+            Flag.truthy("OPENCODE_CWD_ENABLED")
+
           if (
+            !isFoldEnabled &&
             lastFinished &&
             lastFinished.summary !== true &&
             (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
@@ -1260,6 +1268,9 @@ const layer = Layer.effect(
               sys.mcp(agent, session.permission),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
+            const foldedMsgs = isFoldEnabled
+              ? foldPrepare(sessionID, modelMsgs, lastFinished?.tokens?.input, cfg.experimental?.context_warp_drive)
+              : modelMsgs
             const system = [
               ...env,
               ...instructions,
@@ -1276,7 +1287,7 @@ const layer = Layer.effect(
               parentSessionID: session.parentID,
               system,
               messages: [
-                ...modelMsgs,
+                ...foldedMsgs,
                 ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS_PROMPT }] : []),
               ],
               tools,

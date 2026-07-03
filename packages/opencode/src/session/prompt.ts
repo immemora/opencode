@@ -58,6 +58,7 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 import { prepare as foldPrepare } from "./fold"
+import { ExperimentalGate } from "@/immemora"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1163,7 +1164,8 @@ const layer = Layer.effect(
           const cfg = yield* config.get()
           const isFoldEnabled =
             cfg.experimental?.context_warp_drive?.enabled === true ||
-            truthy("OPENCODE_CWD_ENABLED")
+            truthy("OPENCODE_CWD_ENABLED") ||
+            ExperimentalGate.isFeatureEnabled("context_warp_drive")
 
           if (
             !isFoldEnabled &&

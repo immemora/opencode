@@ -1,21 +1,22 @@
 import { Effect, Option, Schema, Scope, Stream } from "effect"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import * as path from "path"
-import * as Tool from "./tool"
+import * as Tool from "../tool"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { LSP } from "@/lsp/lsp"
-import DESCRIPTION from "./read.txt"
+import DESCRIPTION from "./smaller_read.txt"
 import { InstanceState } from "@/effect/instance-state"
-import { assertExternalDirectoryEffect } from "./external-directory"
-import { Instruction } from "../session/instruction"
+import { assertExternalDirectoryEffect } from "../external-directory"
+import { Instruction } from "../../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
-import { SmallerReadTool } from "./smaller_edits/smalled_read"
-import { smallerEditsEnabled } from "./smaller_edits/gate"
+import { formatIdentityLine, hashFirstLine, hashNextLine } from "./linehash"
+import { Service as SmallerEditsState } from "./state"
 
-const DEFAULT_READ_LIMIT = 2000
+const DEFAULT_READ_LIMIT = 200
+const MAX_READ_LIMIT = 400
 const MAX_LINE_LENGTH = 2000
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
-const MAX_BYTES = 50 * 1024
+const MAX_BYTES = 12 * 1024
 const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 const SAMPLE_BYTES = 4096
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
@@ -33,7 +34,7 @@ export const Parameters = Schema.Struct({
     description: "The line number to start reading from (1-indexed)",
   }),
   limit: Schema.optional(NonNegativeInt).annotate({
-    description: "The maximum number of lines to read (defaults to 2000)",
+    description: "The maximum number of lines to read (defaults to 200, capped at 400)",
   }),
 })
 
@@ -63,10 +64,19 @@ type Metadata = {
   display?: Display
 }
 
-export const ReadTool_default = Tool.define<
+function resolveReadLimit(limit: number | undefined) {
+  return Math.min(limit ?? DEFAULT_READ_LIMIT, MAX_READ_LIMIT)
+}
+
+function limitNote(requested: number | undefined, applied: number) {
+  if (requested === undefined || requested <= applied) return undefined
+  return `(Requested limit ${requested} capped at ${applied} lines for chunked reads.)`
+}
+
+export const SmallerReadTool = Tool.define<
   typeof Parameters,
   Metadata,
-  FSUtil.Service | Instruction.Service | LSP.Service | Scope.Scope
+  FSUtil.Service | Instruction.Service | LSP.Service | Scope.Scope | SmallerEditsState
 >(
   "read",
   Effect.gen(function* () {
@@ -74,6 +84,7 @@ export const ReadTool_default = Tool.define<
     const instruction = yield* Instruction.Service
     const lsp = yield* LSP.Service
     const scope = yield* Scope.Scope
+    const smallerEditsState = yield* SmallerEditsState
 
     const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
       const dir = path.dirname(filepath)
@@ -138,7 +149,7 @@ export const ReadTool_default = Tool.define<
 
     const lines = Effect.fn("ReadTool.lines")(function* (filepath: string, opts: { limit: number; offset: number }) {
       const start = opts.offset - 1
-      const raw: string[] = []
+      const raw: Array<{ content: string; lineno: number; chainHash: string; text: string }> = []
       const flags = { bytes: 0, count: 0, cut: false, more: false, done: false }
 
       // Note: prefer manual TextDecoder over Stream.decodeText — when the source stream
@@ -147,6 +158,7 @@ export const ReadTool_default = Tool.define<
       // line of the upstream splitLines pipeline) and use a tagged error to stop the
       // upstream file stream as soon as the byte cap is reached.
       const decoder = new TextDecoder("utf-8")
+      let prevHash = ""
       yield* fs.stream(filepath).pipe(
         Stream.map((bytes) => decoder.decode(bytes, { stream: true })),
         Stream.splitLines,
@@ -154,6 +166,9 @@ export const ReadTool_default = Tool.define<
           Effect.gen(function* () {
             if (flags.done) return yield* new ReadStop()
             flags.count += 1
+            const line = text.length > MAX_LINE_LENGTH ? text.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text
+            const chainHash = flags.count === 1 ? hashFirstLine(line) : hashNextLine(prevHash, line)
+            prevHash = chainHash
             if (flags.count <= start) return
 
             if (raw.length >= opts.limit) {
@@ -161,10 +176,15 @@ export const ReadTool_default = Tool.define<
               return
             }
 
-            const line = text.length > MAX_LINE_LENGTH ? text.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text
-            const size = Buffer.byteLength(line, "utf-8") + (raw.length > 0 ? 1 : 0)
+            const rendered = formatIdentityLine(flags.count, chainHash, line)
+            const size = Buffer.byteLength(rendered, "utf-8") + (raw.length > 0 ? 1 : 0)
             if (flags.bytes + size <= MAX_BYTES) {
-              raw.push(line)
+              raw.push({
+                content: line,
+                lineno: flags.count,
+                chainHash,
+                text: rendered,
+              })
               flags.bytes += size
               return
             }
@@ -178,8 +198,8 @@ export const ReadTool_default = Tool.define<
         Effect.catchTag("ReadStop", () => Effect.void),
       )
 
-      return { raw, count: flags.count, cut: flags.cut, more: flags.more, offset: opts.offset }
-    })
+       return { raw, count: flags.count, cut: flags.cut, more: flags.more, offset: opts.offset }
+     })
 
     const isBinaryFile = (filepath: string, bytes: Uint8Array) => {
       const ext = path.extname(filepath).toLowerCase()
@@ -265,23 +285,27 @@ export const ReadTool_default = Tool.define<
 
       if (stat.type === "Directory") {
         const items = yield* list(filepath)
-        const limit = params.limit ?? DEFAULT_READ_LIMIT
+        const limit = resolveReadLimit(params.limit)
         const offset = params.offset || 1
         const start = offset - 1
         const sliced = items.slice(start, start + limit)
         const truncated = start + sliced.length < items.length
+        const note = limitNote(params.limit, limit)
 
         return {
           title,
           output: [
             `<path>${filepath}</path>`,
             `<type>directory</type>`,
+            `<window offset="${offset}" limit="${limit}">`,
             `<entries>`,
             sliced.join("\n"),
             truncated
               ? `\n(Showing ${sliced.length} of ${items.length} entries. Use 'offset' parameter to read beyond entry ${offset + sliced.length})`
               : `\n(${items.length} entries)`,
             `</entries>`,
+            `</window>`,
+            ...(note ? [note] : []),
           ].join("\n"),
           metadata: {
             preview: sliced.slice(0, 20).join("\n"),
@@ -330,27 +354,50 @@ export const ReadTool_default = Tool.define<
         return yield* Effect.fail(new Error(`Cannot read binary file: ${filepath}`))
       }
 
-      const file = yield* lines(filepath, { limit: params.limit ?? DEFAULT_READ_LIMIT, offset: params.offset || 1 })
+      const limit = resolveReadLimit(params.limit)
+      const note = limitNote(params.limit, limit)
+      const file = yield* lines(filepath, { limit, offset: params.offset || 1 })
       if (file.count < file.offset && !(file.count === 0 && file.offset === 1)) {
         return yield* Effect.fail(
           new Error(`Offset ${file.offset} is out of range for this file (${file.count} lines)`),
         )
       }
 
-      let output = [`<path>${filepath}</path>`, `<type>file</type>`, "<content>\n"].join("\n")
-      output += file.raw.map((line, i) => `${i + file.offset}: ${line}`).join("\n")
+      if (file.raw.length > 0) {
+        yield* smallerEditsState.replaceWindowLines({
+          filePath: filepath,
+          start: file.raw[0]!.lineno,
+          end: file.raw[file.raw.length - 1]!.lineno,
+          lines: file.raw.map((line) => ({
+            _tag: "line" as const,
+            fileno: line.lineno,
+            orig_fileno: line.lineno,
+            chainHash: line.chainHash,
+            content: line.content,
+          })),
+        })
+      }
+
+      let output = [
+        `<path>${filepath}</path>`,
+        `<type>file</type>`,
+        `<window offset="${file.offset}" limit="${limit}">`,
+        "<content>",
+      ].join("\n")
+      output += file.raw.map((line) => line.text).join("\n")
 
       const last = file.offset + file.raw.length - 1
       const next = last + 1
       const truncated = file.more || file.cut
       if (file.cut) {
-        output += `\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing lines ${file.offset}-${last}. Use offset=${next} to continue.)`
+        output += `\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing identity-prefixed lines ${file.offset}-${last}. Use offset=${next} to continue.)`
       } else if (file.more) {
-        output += `\n\n(Showing lines ${file.offset}-${last} of ${file.count}. Use offset=${next} to continue.)`
+        output += `\n\n(Showing identity-prefixed lines ${file.offset}-${last} of ${file.count}. Use offset=${next} to continue.)`
       } else {
         output += `\n\n(End of file - total ${file.count} lines)`
       }
-      output += "\n</content>"
+      output += "\n</content>\n</window>"
+      if (note) output += `\n${note}`
 
       yield* warm(filepath)
 
@@ -362,13 +409,13 @@ export const ReadTool_default = Tool.define<
         title,
         output,
         metadata: {
-          preview: file.raw.slice(0, 20).join("\n"),
+          preview: file.raw.slice(0, 20).map((line) => line.text).join("\n"),
           truncated,
           loaded: loaded.map((item) => item.filepath),
           display: {
             type: "file" as const,
             path: filepath,
-            text: file.raw.join("\n"),
+            text: file.raw.map((line) => line.text).join("\n"),
             lineStart: file.offset,
             lineEnd: last,
             totalLines: file.count,
@@ -386,6 +433,3 @@ export const ReadTool_default = Tool.define<
     }
   }),
 )
-
-
-export const ReadTool = smallerEditsEnabled ? ReadTool_default : SmallerReadTool;

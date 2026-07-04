@@ -1,0 +1,14 @@
+Refresh the order reporting module.
+
+Work only in these files:
+- `src/orders/report.ts`
+- `src/orders/console.ts`
+- `docs/orders-report.md`
+
+Requirements:
+1. Introduce a shared `statusLabel(status: OrderStatus)` helper in each code file and use it everywhere instead of repeated literal branches. Labels must be: `draft -> Draft`, `paid -> Paid`, `overdue -> Overdue`, `hold -> On hold`, `refunded -> Refunded`, `cancelled -> Cancelled`.
+2. In `src/orders/report.ts`, add `agingLabel(daysOverdue: number)` returning `due now` for values less than or equal to 0, `1 day overdue` for 1, and `${n} days overdue` otherwise.
+3. In `src/orders/report.ts`, overdue orders must append ` (${agingLabel(order.daysOverdue)})` after the status label in the detailed row renderer and in the expanded summary section.
+4. In `src/orders/console.ts`, overdue orders with `daysOverdue > 0` must append ` overdue=<days>d` to the compact line. Other statuses must not append any overdue suffix.
+5. Update the docs examples and the supported statuses table to match the new labels and overdue wording.
+6. Do not reorder the sample data.

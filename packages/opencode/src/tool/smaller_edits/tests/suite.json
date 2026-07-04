@@ -1,0 +1,52 @@
+{
+  "scenarios": [
+    {
+      "name": "order_report_refresh",
+      "path": "scenario_order_report_refresh",
+      "prompt": "prompt.txt",
+      "input": "input",
+      "expected": "expected",
+      "notes": [
+        "multiple edits across two TypeScript files and one markdown file",
+        "repeated status branches with one renamed label",
+        "overdue formatting changes in separate regions"
+      ]
+    },
+    {
+      "name": "team_digest_rollup",
+      "path": "scenario_team_digest_rollup",
+      "prompt": "prompt.txt",
+      "input": "input",
+      "expected": "expected",
+      "notes": [
+        "repeated bucket-label branches",
+        "freshness helper added in one file and reflected in another",
+        "docs updates with changed examples and glossary"
+      ]
+    },
+    {
+      "name": "incident_templates_extraction",
+      "path": "scenario_incident_templates_extraction",
+      "prompt": "prompt.txt",
+      "input": "input",
+      "expected": "expected",
+      "notes": [
+        "extract shared helpers into a newly created file",
+        "update imports and type usage across existing files",
+        "docs reflect new helper module and new labels"
+      ]
+    },
+    {
+      "name": "runbook_outline_upgrade",
+      "path": "scenario_runbook_outline_upgrade",
+      "prompt": "prompt.txt",
+      "input": "input",
+      "expected": "expected",
+      "notes": [
+        "repeated section label branches",
+        "priority mapping appears in multiple rendered views",
+        "docs table and examples updated to match"
+      ]
+    }
+  ]
+}

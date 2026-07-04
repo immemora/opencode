@@ -1,0 +1,14 @@
+Upgrade the runbook renderer.
+
+Work only in these files:
+- `src/runbook/outline.ts`
+- `src/runbook/render.ts`
+- `docs/runbook-outline.md`
+
+Requirements:
+1. Replace repeated local section-label branching with a shared `sectionLabel(section: RunbookSection)` helper in both code files. Labels must be `prepare -> Prepare`, `verify -> Verify`, `rollback -> Roll back`, `followup -> Follow up`.
+2. Add `priorityLabel(priority: number)` in `src/runbook/outline.ts` with `1 -> urgent`, `2 -> high`, `3 -> normal`, any other value -> `deferred`.
+3. In outline step lines, append ` [priority=<priorityLabel>]` after the section label.
+4. In `src/runbook/render.ts`, card lines must prefix the title with the section label and append ` :: priority=<priorityLabel>`.
+5. Update docs examples and the glossary table to match the new labels and priority mapping.
+6. Keep repeated sample steps intact and in the same order.

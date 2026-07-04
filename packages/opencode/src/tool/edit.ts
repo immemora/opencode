@@ -18,6 +18,8 @@ import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Bom from "@/util/bom"
+import { smallerEditsEnabled } from "./smaller_edits/gate"
+import { SmallerEditTool } from "./smaller_edits/smalled_edit"
 
 function normalizeLineEndings(text: string): string {
   return text.replaceAll("\r\n", "\n")
@@ -55,7 +57,7 @@ export const Parameters = Schema.Struct({
   }),
 })
 
-export const EditTool = Tool.define(
+export const EditTool_default = Tool.define(
   "edit",
   Effect.gen(function* () {
     const lsp = yield* LSP.Service
@@ -679,7 +681,7 @@ export function trimDiff(diff: string): string {
   return trimmedLines.join("\n")
 }
 
-export function replace(content: string, oldString: string, newString: string, replaceAll = false): string {
+function replace(content: string, oldString: string, newString: string, replaceAll = false): string {
   if (oldString === newString) {
     throw new Error("No changes to apply: oldString and newString are identical.")
   }
@@ -735,3 +737,6 @@ function isDisproportionateMatch(search: string, oldString: string) {
   if (oldLines === 1) return false
   return search.trim().length > Math.max(oldString.trim().length + 500, oldString.trim().length * 4)
 }
+
+
+export const EditTool = smallerEditsEnabled ? EditTool_default : SmallerEditTool;

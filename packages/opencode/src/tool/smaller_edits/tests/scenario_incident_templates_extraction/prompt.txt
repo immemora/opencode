@@ -1,0 +1,18 @@
+Extract shared incident message helpers into a new file.
+
+Work only in these files:
+- `src/incidents/timeline.ts`
+- `src/incidents/email.ts`
+- `docs/incidents.md`
+- create `src/incidents/templates.ts`
+
+Requirements:
+1. Create `src/incidents/templates.ts` with shared exported helpers:
+   - `severityLabel(severity: IncidentSeverity)` using labels `sev0 -> Critical`, `sev1 -> High`, `sev2 -> Moderate`, `sev3 -> Low`.
+   - `audienceLabel(audience: IncidentAudience)` using labels `internal -> Internal`, `customer -> Customer`, `partner -> Partner`.
+   - `resolutionLabel(resolved: boolean)` returning `Resolved` or `Open`.
+2. Update `timeline.ts` and `email.ts` to import and use these helpers everywhere instead of local repeated branching.
+3. In timeline entries, append ` / ${resolutionLabel(item.resolved)}` after the severity label.
+4. In email subjects, use the exact format `${severityLabel(incident.severity)} incident update: ${incident.title}`.
+5. In audience summary lines, use `${audienceLabel(...)} audience` wording.
+6. Update docs so examples and tables match the new labels and the extracted helper file.

@@ -1,0 +1,14 @@
+Refresh the team digest output.
+
+Work only in these files:
+- `src/digest/summary.ts`
+- `src/digest/render.ts`
+- `docs/team-digest.md`
+
+Requirements:
+1. Replace repeated bucket-label branching with a shared `bucketLabel(bucket: DigestBucket)` helper in both code files. Labels must be `attention -> Needs attention`, `watch -> Watch`, `steady -> Steady`, `celebrate -> Celebrate`.
+2. Add `freshnessLabel(hoursStale: number)` in `src/digest/summary.ts` with these rules: `<= 6` => `fresh`, `<= 24` => `aging`, otherwise `stale`.
+3. In `src/digest/summary.ts`, item lines and owner summary lines must append ` [freshness=<label>]`.
+4. In `src/digest/render.ts`, compact card lines must append ` stale=<hours>h` only when `hoursStale > 24`.
+5. Update the docs examples, glossary, and explanation text to match the new labels and freshness output.
+6. Preserve the order of buckets and the order of seed items.

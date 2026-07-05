@@ -168,16 +168,16 @@ export function define<
   )
 }
 
-export function init<P extends Schema.Decoder<unknown>, M extends Metadata>(
-  info: Info<P, M>,
-): Effect.Effect<Def<P, M>> {
+export function init<T extends Info<Schema.Decoder<unknown>, Metadata>>(
+  info: T,
+): Effect.Effect<InferDef<T>> {
   return Effect.gen(function* () {
     const init = yield* info.init()
     return {
       ...init,
       id: info.id,
     }
-  })
+  }) as Effect.Effect<InferDef<T>>
 }
 
 export * as Tool from "./tool"

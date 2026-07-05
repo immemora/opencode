@@ -47,6 +47,18 @@
         "priority mapping appears in multiple rendered views",
         "docs table and examples updated to match"
       ]
+    },
+    {
+      "name": "adjacent_batch_boundaries",
+      "path": "scenario_adjacent_batch_boundaries",
+      "prompt": "prompt.txt",
+      "input": "input",
+      "expected": "expected",
+      "notes": [
+        "single-file batched edit with a helper insertion and later replacements",
+        "insert-after boundary sits immediately before a replaced line",
+        "stresses same-batch planning against the pre-edit snapshot"
+      ]
     }
   ]
 }

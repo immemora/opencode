@@ -1,0 +1,14 @@
+Refresh the team digest summary module.
+
+Work only in these files:
+- `src/digest/summary.ts`
+
+Requirements:
+1. Replace the duplicated `bucketTitle` and `ownerBucketTitle` branches with a shared `bucketLabel(bucket: DigestBucket)` helper.
+   Keep the existing labels the same except that `attention` must render as `Needs attention`.
+2. Add `freshnessLabel(hoursStale: number)` with these rules: `<= 6` => `fresh`, `<= 24` => `aging`, otherwise `stale`.
+3. In `renderItem`, append ` [freshness=<label>]` to the first item line.
+4. In `renderOwnerSummary`, append ` [freshness=<label>]` to each owner summary line.
+5. Keep the seed item order unchanged.
+
+This scenario is intentionally chosen so the safest solution is a single batched edit call in `src/digest/summary.ts` that mixes a helper insertion near the top with replacements farther down the same file.

@@ -5,8 +5,8 @@ Usage:
 - This smaller read tool is intentionally chunked. By default it returns up to 200 lines and caps reads at 400 lines even if you request more.
 - The offset parameter is the line number to start from (1-indexed).
 - To read later sections, call this tool again with a larger offset instead of asking for the whole file.
-- For text files, each returned line is prefixed as `{lineno},{chainHash}|content`. The `{lineno},{chainHash}` identity is the handle the smaller edit tool uses later.
-- The identity prefix is not part of the file content. When you prepare replacement text, copy only the content after the `|`.
+- For text files, each returned line uses the active line-anchor rendering format. Copy the full rendered anchor prefix exactly when you later call the smaller edit tool.
+- The rendered anchor prefix is not part of the file content. When you prepare replacement text, copy only the content portion.
 - Successful text reads refresh the in-process sparse remembered state only for the emitted window. Unread gaps remain unknown and may need another read before an edit can target them.
 - Use the grep tool to find specific content in large files or files with long lines.
 - If you are unsure of the correct file path, use the glob tool to look up filenames by glob pattern.

@@ -51,6 +51,7 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { SmallerEditsStateNode } from "./smaller_edits/state"
 
 export function webSearchEnabled(providerID: ProviderV2.ID, flags = { exa: false, parallel: false }) {
   return providerID === ProviderV2.ID.opencode || flags.exa || flags.parallel
@@ -411,6 +412,7 @@ export const node = LayerNode.make({
     CrossSpawnSpawner.node,
     Format.node,
     Truncate.node,
+    SmallerEditsStateNode,
     RuntimeFlags.node,
     Database.node,
     Ripgrep.node,

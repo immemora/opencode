@@ -3,7 +3,7 @@ import path from "path"
 import fs from "fs/promises"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
-import { EditTool } from "../../src/tool/edit"
+import { EditTool_default } from "../../src/tool/edit"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -38,19 +38,19 @@ const layer = LayerNode.compile(
 const it = testEffect(layer)
 
 const init = Effect.fn("EditToolTest.init")(function* () {
-  const info = yield* EditTool
+  const info = yield* EditTool_default
   return yield* info.init()
 })
 
 const run = Effect.fn("EditToolTest.run")(function* (
-  args: Tool.InferParameters<typeof EditTool>,
+  args: Tool.InferParameters<typeof EditTool_default>,
   next: Tool.Context = ctx,
 ) {
   const tool = yield* init()
   return yield* tool.execute(args, next)
 })
 
-const fail = Effect.fn("EditToolTest.fail")(function* (args: Tool.InferParameters<typeof EditTool>) {
+const fail = Effect.fn("EditToolTest.fail")(function* (args: Tool.InferParameters<typeof EditTool_default>) {
   const exit = yield* run(args).pipe(Effect.exit)
   if (Exit.isFailure(exit)) {
     const err = Cause.squash(exit.cause)

@@ -10,9 +10,16 @@ import { Format } from "../../src/format"
 import { LSP } from "../../src/lsp/lsp"
 import { Instruction } from "../../src/session/instruction"
 import { MessageID, SessionID } from "../../src/session/schema"
-import { hashFirstLine, parseIdentityLine } from "../../src/tool/smaller_edits/linehash"
-import { SmallerEditTool } from "../../src/tool/smaller_edits/smalled_edit"
-import { SmallerReadTool } from "../../src/tool/smaller_edits/smalled_read"
+import {
+  DIGEST_WIDTH,
+  lineAnchors,
+  LineAnchors,
+  LineHashTokenice100k,
+  LineHashTokenice200k,
+} from "../../src/tool/smaller_edits/linehash"
+import type { LineHashName } from "../../src/tool/smaller_edits/linehash"
+import { SmallerEditTool } from "../../src/tool/smaller_edits/smaller_edit"
+import { SmallerReadTool } from "../../src/tool/smaller_edits/smaller_read"
 import { node as smallerEditsStateNode, Service as SmallerEditsState } from "../../src/tool/smaller_edits/state"
 import { Truncate } from "../../src/tool/truncate"
 import * as Tool from "../../src/tool/tool"
@@ -65,23 +72,36 @@ const initEdit = Effect.fn("SmallerEditsTest.initEdit")(function* () {
 const runRead = Effect.fn("SmallerEditsTest.runRead")(function* (
   args: Tool.InferParameters<typeof SmallerReadTool>,
   next: Tool.Context = ctx,
+  selection: LineHashName = "b64",
 ) {
+  const restore = setLineHash(selection)
   const tool = yield* initRead()
-  return yield* tool.execute(args, next)
+  try {
+    return yield* tool.execute(args, next)
+  } finally {
+    restore()
+  }
 })
 
 const runEdit = Effect.fn("SmallerEditsTest.runEdit")(function* (
   args: Tool.InferParameters<typeof SmallerEditTool>,
   next: Tool.Context = ctx,
+  selection: LineHashName = "b64",
 ) {
+  const restore = setLineHash(selection)
   const tool = yield* initEdit()
-  return yield* tool.execute(args, next)
+  try {
+    return yield* tool.execute(args, next)
+  } finally {
+    restore()
+  }
 })
 
 const failEdit = Effect.fn("SmallerEditsTest.failEdit")(function* (
   args: Tool.InferParameters<typeof SmallerEditTool>,
+  selection: LineHashName = "b64",
 ) {
-  const exit = yield* runEdit(args).pipe(Effect.exit)
+  const exit = yield* runEdit(args, ctx, selection).pipe(Effect.exit)
   if (Exit.isFailure(exit)) {
     const err = Cause.squash(exit.cause)
     return err instanceof Error ? err : new Error(String(err))
@@ -101,7 +121,13 @@ const load = Effect.fn("SmallerEditsTest.load")(function* (p: string) {
 
 function displayLines(text: string) {
   if (!text) return []
-  return text.split("\n").filter(Boolean).map(parseIdentityLine)
+  return displayLinesFor("b64", text)
+}
+
+function displayLinesFor(selection: LineHashName, text: string) {
+  if (!text) return []
+  const codec = lineAnchors(selection)
+  return text.split("\n").filter(Boolean).map((line) => codec.parseRenderedLine(line))
 }
 
 function fileDisplayText(display: { type: "file"; text: string } | { type: "directory" } | undefined) {
@@ -109,15 +135,84 @@ function fileDisplayText(display: { type: "file"; text: string } | { type: "dire
   return display.text
 }
 
+function setLineHash(selection: LineHashName) {
+  const previous = process.env.OPENCODE_SMALLER_EDITS_LINEHASH
+  process.env.OPENCODE_SMALLER_EDITS_LINEHASH = selection
+  return () => {
+    if (previous === undefined) {
+      delete process.env.OPENCODE_SMALLER_EDITS_LINEHASH
+      return
+    }
+    process.env.OPENCODE_SMALLER_EDITS_LINEHASH = previous
+  }
+}
+
 describe("tool.smaller_edits linehash", () => {
   bunIt("rejects malformed identity prefixes", () => {
-    expect(() => parseIdentityLine("bad line")).toThrow("Malformed identity-prefixed line")
-    expect(() => parseIdentityLine("0,abc123|x")).toThrow("Malformed line identity")
+    const codec = lineAnchors("b64")
+    expect(() => codec.parseRenderedLine("bad line")).toThrow("Malformed anchored line")
+    expect(() => codec.parseRenderedLine("0,abcd|x")).toThrow("Malformed anchor")
   })
 
   bunIt("normalizes line endings before hashing", () => {
-    expect(hashFirstLine("alpha\r\nbeta")).toBe(hashFirstLine("alpha\nbeta"))
-    expect(hashFirstLine("alpha\rbeta")).toBe(hashFirstLine("alpha\nbeta"))
+    const codec = lineAnchors("b64")
+    expect(codec.firstToken("alpha\r\nbeta")).toBe(codec.firstToken("alpha\nbeta"))
+    expect(codec.firstToken("alpha\rbeta")).toBe(codec.firstToken("alpha\nbeta"))
+  })
+
+  bunIt("uses a 4-character digest and tolerates copied line content in anchors", () => {
+    const codec = lineAnchors("b64")
+    expect(codec.firstToken("alpha")).toHaveLength(DIGEST_WIDTH)
+    expect(codec.parseAnchor("12,abcd|const x = 1")).toEqual({ lineno: 12, token: "abcd" })
+    expect(codec.parseAnchor("12,ab")).toEqual({ lineno: 12, token: "ab" })
+  })
+})
+
+describe("tool.smaller_edits linehash tokenice", () => {
+  bunIt("parses line,word anchors and rendered lines", () => {
+    const token = LineHashTokenice100k.firstToken("const x = 1")
+    const rendered = LineHashTokenice100k.formatRenderedLine({ lineno: 12, token, content: "const x = 1" })
+
+    expect(rendered).toBe(`12,${token}!const x = 1`)
+    expect(LineHashTokenice100k.parseAnchor(rendered)).toEqual({ lineno: 12, token })
+    expect(LineHashTokenice100k.parseRenderedLine(rendered)).toEqual({
+      lineno: 12,
+      token,
+      content: "const x = 1",
+      text: rendered,
+    })
+  })
+
+  bunIt("normalizes line endings before deriving nonce words", () => {
+    expect(LineHashTokenice100k.firstToken("alpha\r\nbeta")).toBe(LineHashTokenice100k.firstToken("alpha\nbeta"))
+    expect(LineHashTokenice100k.firstToken("alpha\rbeta")).toBe(LineHashTokenice100k.firstToken("alpha\nbeta"))
+  })
+
+  bunIt("emits lowercase nonce words and matches exact anchors", () => {
+    const token = LineHashTokenice100k.firstToken("alpha")
+
+    expect(token).toMatch(/^[a-z]+$/)
+    expect(LineHashTokenice100k.matchAnchorToken(token, [token])).toEqual({ _tag: "match" })
+    expect(LineHashTokenice100k.matchAnchorToken(token.slice(0, 3), [token])).toEqual({ _tag: "miss" })
+    expect(LineHashTokenice100k.parseAnchor(`12,${token.toUpperCase()}`)).toEqual({ lineno: 12, token })
+  })
+
+  bunIt("stays deterministic per mode and distinguishes configured vocabularies", () => {
+    expect(LineHashTokenice100k.firstToken("alpha")).toBe(LineHashTokenice100k.firstToken("alpha"))
+    expect(LineHashTokenice100k.firstToken("alpha")).not.toBe(LineHashTokenice200k.firstToken("alpha"))
+  })
+
+  bunIt("selects implementations by explicit parameter and envvar", () => {
+    expect(lineAnchors("b64").name).toBe("linehash-b64")
+    expect(lineAnchors("tokenice-cl100k").name).toBe("linehash-tokenice-cl100k")
+    expect(lineAnchors("tokenice-o200k").name).toBe("linehash-tokenice-o200k")
+
+    const restore = setLineHash("tokenice-cl100k")
+    try {
+      expect(LineAnchors.name).toBe("linehash-tokenice-cl100k")
+    } finally {
+      restore()
+    }
   })
 })
 
@@ -133,9 +228,9 @@ describe("tool.smaller_edits state", () => {
         start: 2,
         end: 4,
         lines: [
-          { _tag: "line", fileno: 2, orig_fileno: 2, chainHash: "line-2", content: "two" },
-          { _tag: "line", fileno: 3, orig_fileno: 3, chainHash: "line-3", content: "three" },
-          { _tag: "line", fileno: 4, orig_fileno: 4, chainHash: "line-4", content: "four" },
+          { _tag: "line", fileno: 2, orig_fileno: 2, token: "line-2", content: "two" },
+          { _tag: "line", fileno: 3, orig_fileno: 3, token: "line-3", content: "three" },
+          { _tag: "line", fileno: 4, orig_fileno: 4, token: "line-4", content: "four" },
         ],
       })
 
@@ -149,8 +244,8 @@ describe("tool.smaller_edits state", () => {
       const afterInsert = yield* state.getFileState(filePath)
       expect(afterInsert.atoms).toEqual([
         { _tag: "offset", fileno: 5, orig_fileno: 3, delta: 2 },
-        { _tag: "line", fileno: 5, orig_fileno: 3, chainHash: "line-3", content: "three" },
-        { _tag: "line", fileno: 6, orig_fileno: 4, chainHash: "line-4", content: "four" },
+        { _tag: "line", fileno: 5, orig_fileno: 3, token: "line-3", content: "three" },
+        { _tag: "line", fileno: 6, orig_fileno: 4, token: "line-4", content: "four" },
       ])
 
       yield* state.recordEditShift({
@@ -163,7 +258,7 @@ describe("tool.smaller_edits state", () => {
       const afterDelete = yield* state.getFileState(filePath)
       expect(afterDelete.atoms).toEqual([
         { _tag: "offset", fileno: 5, orig_fileno: 6, delta: -1 },
-        { _tag: "line", fileno: 5, orig_fileno: 4, chainHash: "line-4", content: "four" },
+        { _tag: "line", fileno: 5, orig_fileno: 4, token: "line-4", content: "four" },
       ])
     }),
   )
@@ -179,8 +274,8 @@ describe("tool.smaller_edits state", () => {
         start: 1,
         end: 2,
         lines: [
-          { _tag: "line", fileno: 1, orig_fileno: 1, chainHash: "old-1", content: "alpha" },
-          { _tag: "line", fileno: 2, orig_fileno: 2, chainHash: "old-2", content: "beta" },
+          { _tag: "line", fileno: 1, orig_fileno: 1, token: "old-1", content: "alpha" },
+          { _tag: "line", fileno: 2, orig_fileno: 2, token: "old-2", content: "beta" },
         ],
       })
 
@@ -189,23 +284,23 @@ describe("tool.smaller_edits state", () => {
         start: 2,
         end: 3,
         lines: [
-          { _tag: "line", fileno: 2, orig_fileno: 2, chainHash: "new-2", content: "BETA" },
-          { _tag: "line", fileno: 3, orig_fileno: 3, chainHash: "new-3", content: "gamma" },
+          { _tag: "line", fileno: 2, orig_fileno: 2, token: "new-2", content: "BETA" },
+          { _tag: "line", fileno: 3, orig_fileno: 3, token: "new-3", content: "gamma" },
         ],
       })
 
       const refreshed = yield* state.getFileState(filePath)
       expect(refreshed.atoms).toEqual([
-        { _tag: "line", fileno: 1, orig_fileno: 1, chainHash: "old-1", content: "alpha" },
-        { _tag: "line", fileno: 2, orig_fileno: 2, chainHash: "new-2", content: "BETA" },
-        { _tag: "line", fileno: 3, orig_fileno: 3, chainHash: "new-3", content: "gamma" },
+        { _tag: "line", fileno: 1, orig_fileno: 1, token: "old-1", content: "alpha" },
+        { _tag: "line", fileno: 2, orig_fileno: 2, token: "new-2", content: "BETA" },
+        { _tag: "line", fileno: 3, orig_fileno: 3, token: "new-3", content: "gamma" },
       ])
       expect(
-        yield* state.resolveVisibleLine({ filePath, lineno: 2, chainHash: "old-2" }),
+        yield* state.resolveVisibleLine({ filePath, lineno: 2, token: "old-2" }),
       ).toBeUndefined()
       expect(
-        yield* state.resolveVisibleLine({ filePath, lineno: 2, chainHash: "new-2" }),
-      ).toEqual({ _tag: "line", fileno: 2, orig_fileno: 2, chainHash: "new-2", content: "BETA" })
+        yield* state.resolveVisibleLine({ filePath, lineno: 2, token: "new-2" }),
+      ).toEqual({ _tag: "line", fileno: 2, orig_fileno: 2, token: "new-2", content: "BETA" })
     }),
   )
 
@@ -232,7 +327,7 @@ describe("tool.smaller_edits", () => {
       const first = yield* runRead({ filePath })
       const firstLines = displayLines(fileDisplayText(first.metadata.display))
       expect(firstLines).toHaveLength(3)
-      expect(new Set(firstLines.map((line) => line.chainHash)).size).toBe(3)
+      expect(new Set(firstLines.map((line) => line.token)).size).toBe(3)
 
       const state = yield* SmallerEditsState
       const firstState = yield* state.getFileState(filePath)
@@ -264,8 +359,8 @@ describe("tool.smaller_edits", () => {
         operations: [
           {
             kind: "replace_range",
-            start: `${secondDup.lineno},${secondDup.chainHash}`,
-            end: `${secondDup.lineno},${secondDup.chainHash}`,
+            start: `${secondDup.lineno},${secondDup.token}`,
+            end: `${secondDup.lineno},${secondDup.token}`,
             content: "mid",
           },
         ],
@@ -276,7 +371,7 @@ describe("tool.smaller_edits", () => {
       const midLine = returnedLines.find((line) => line.content === "mid")
       const omegaLine = returnedLines.find((line) => line.content === "omega")
       expect(midLine).toBeDefined()
-      expect(midLine?.chainHash).not.toBe(secondDup.chainHash)
+      expect(midLine?.token).not.toBe(secondDup.token)
       expect(omegaLine).toBeDefined()
 
       yield* runEdit({
@@ -284,8 +379,8 @@ describe("tool.smaller_edits", () => {
         operations: [
           {
             kind: "replace_range",
-            start: `${omegaLine!.lineno},${omegaLine!.chainHash}`,
-            end: `${omegaLine!.lineno},${omegaLine!.chainHash}`,
+            start: `${omegaLine!.lineno},${omegaLine!.token}`,
+            end: `${omegaLine!.lineno},${omegaLine!.token}`,
             content: "tail",
           },
         ],
@@ -311,7 +406,7 @@ describe("tool.smaller_edits", () => {
         operations: [
           {
             kind: "insert_after",
-            start: `${one.lineno},${one.chainHash}`,
+            start: `${one.lineno},${one.token}`,
             content: "one-point-five",
           },
         ],
@@ -328,13 +423,161 @@ describe("tool.smaller_edits", () => {
         operations: [
           {
             kind: "delete_range",
-            start: `${inserted.lineno},${inserted.chainHash}`,
-            end: `${shiftedTwo.lineno},${shiftedTwo.chainHash}`,
+            start: `${inserted.lineno},${inserted.token}`,
+            end: `${shiftedTwo.lineno},${shiftedTwo.token}`,
           },
         ],
       })
       expect(yield* load(filePath)).toBe("one\nthree\n")
       expect(two.lineno).toBe(2)
+    }),
+  )
+
+  it.instance("accepts anchors with copied line content in edit operations", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filePath = path.join(test.directory, "copied-anchor.txt")
+      yield* put(filePath, "alpha\nbeta\ngamma\n")
+
+      const read = yield* runRead({ filePath })
+      const lines = displayLines(fileDisplayText(read.metadata.display))
+      const beta = lines.find((line) => line.content === "beta")!
+
+      yield* runEdit({
+        filePath,
+        operations: [
+          {
+            kind: "replace_range",
+            start: `${beta.lineno},${beta.token}|${beta.content}`,
+            end: `${beta.lineno},${beta.token}|${beta.content}`,
+            content: "BETA",
+          },
+        ],
+      })
+
+      expect(yield* load(filePath)).toBe("alpha\nBETA\ngamma\n")
+    }),
+  )
+
+  it.instance("accepts unambiguous short-hash anchors", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filePath = path.join(test.directory, "short-anchor.txt")
+      yield* put(filePath, "alpha\nbeta\ngamma\n")
+
+      const read = yield* runRead({ filePath })
+      const lines = displayLines(fileDisplayText(read.metadata.display))
+      const beta = lines.find((line) => line.content === "beta")!
+
+      yield* runEdit({
+        filePath,
+        operations: [
+          {
+            kind: "replace_range",
+            start: `${beta.lineno},${beta.token.slice(0, 2)}`,
+            end: `${beta.lineno},${beta.token.slice(0, 2)}`,
+            content: "BETA",
+          },
+        ],
+      })
+
+      expect(yield* load(filePath)).toBe("alpha\nBETA\ngamma\n")
+    }),
+  )
+
+  it.instance("rejects ambiguous short-hash anchors", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filePath = path.join(test.directory, "ambiguous-short-anchor.txt")
+      yield* put(filePath, "alpha\nbeta\ngamma\n")
+
+      const state = yield* SmallerEditsState
+      yield* state.replaceWindowLines({
+        filePath,
+        start: 2,
+        end: 2,
+        lines: [
+          { _tag: "line", fileno: 2, orig_fileno: 2, token: "ab12", tokenAliases: ["ac34"], content: "beta" },
+          { _tag: "line", fileno: 4, orig_fileno: 2, token: "ab56", content: "beta shifted" },
+        ],
+      })
+
+      const err = yield* failEdit({
+        filePath,
+        operations: [
+          {
+            kind: "replace_range",
+            start: "2,ab",
+            end: "2,ab",
+            content: "BETA",
+          },
+        ],
+      })
+
+      expect(err.message).toContain("ambiguous in remembered state")
+    }),
+  )
+
+  it.instance("allows same-file batched edits that only touch adjacent boundaries", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filePath = path.join(test.directory, "batched-boundaries.txt")
+      yield* put(filePath, "alpha\nbeta\ngamma\ndelta\n")
+
+      const read = yield* runRead({ filePath })
+      const lines = displayLines(fileDisplayText(read.metadata.display))
+      const beta = lines.find((line) => line.content === "beta")!
+      const gamma = lines.find((line) => line.content === "gamma")!
+
+      yield* runEdit({
+        filePath,
+        operations: [
+          {
+            kind: "insert_after",
+            start: `${beta.lineno},${beta.token}`,
+            content: "beta-note",
+          },
+          {
+            kind: "replace_range",
+            start: `${gamma.lineno},${gamma.token}`,
+            end: `${gamma.lineno},${gamma.token}`,
+            content: "GAMMA",
+          },
+        ],
+      })
+
+      expect(yield* load(filePath)).toBe("alpha\nbeta\nbeta-note\nGAMMA\ndelta\n")
+    }),
+  )
+
+  it.instance("allows batched insertions anchored to a line that is also replaced", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const filePath = path.join(test.directory, "batched-conflict.txt")
+      yield* put(filePath, "alpha\nbeta\ngamma\n")
+
+      const read = yield* runRead({ filePath })
+      const lines = displayLines(fileDisplayText(read.metadata.display))
+      const beta = lines.find((line) => line.content === "beta")!
+
+      yield* runEdit({
+        filePath,
+        operations: [
+          {
+            kind: "replace_range",
+            start: `${beta.lineno},${beta.token}`,
+            end: `${beta.lineno},${beta.token}`,
+            content: "BETA",
+          },
+          {
+            kind: "insert_after",
+            start: `${beta.lineno},${beta.token}`,
+            content: "beta-note",
+          },
+        ],
+      })
+
+      expect(yield* load(filePath)).toBe("alpha\nBETA\nbeta-note\ngamma\n")
     }),
   )
 
@@ -353,8 +596,8 @@ describe("tool.smaller_edits", () => {
         operations: [
           {
             kind: "replace_range",
-            start: `${slot.lineno},${slot.chainHash}`,
-            end: `${slot.lineno},${slot.chainHash}`,
+            start: `${slot.lineno},${slot.token}`,
+            end: `${slot.lineno},${slot.token}`,
             content: "x\ny\nz",
           },
         ],
@@ -401,8 +644,8 @@ describe("tool.smaller_edits", () => {
         operations: [
           {
             kind: "replace_range",
-            start: "4,aaaaaa",
-            end: "4,aaaaaa",
+            start: "4,aaaa",
+            end: "4,aaaa",
             content: "FOUR",
           },
         ],
@@ -428,8 +671,8 @@ describe("tool.smaller_edits", () => {
         operations: [
           {
             kind: "replace_range",
-            start: `${two.lineno},${two.chainHash}`,
-            end: `${two.lineno},${two.chainHash}`,
+            start: `${two.lineno},${two.token}`,
+            end: `${two.lineno},${two.token}`,
             content: "dos",
           },
         ],
@@ -439,7 +682,7 @@ describe("tool.smaller_edits", () => {
     }),
   )
 
-  it.instance("shifts lower remembered regions after insertions and requires fresh returned identities", () =>
+  it.instance("keeps previously remembered anchors valid after disjoint insertions", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
       const filePath = path.join(test.directory, "shift.txt")
@@ -460,35 +703,21 @@ describe("tool.smaller_edits", () => {
         contextAfter: 10,
       })
 
-      const staleErr = yield* failEdit({
-        filePath,
-        operations: [
-          {
-            kind: "replace_range",
-            start: `${oldThree.lineno},${oldThree.chainHash}`,
-            end: `${oldThree.lineno},${oldThree.chainHash}`,
-            content: "THREE",
-          },
-        ],
-      })
-      expect(staleErr.message).toContain("not available in remembered state")
-
-      const fresh = displayLines(inserted.metadata.display.text)
-      const shiftedThree = fresh.find((line) => line.content === "three")!
-
       yield* runEdit({
         filePath,
         operations: [
           {
             kind: "replace_range",
-            start: `${shiftedThree.lineno},${shiftedThree.chainHash}`,
-            end: `${shiftedThree.lineno},${shiftedThree.chainHash}`,
+            start: `${oldThree.lineno},${oldThree.token}`,
+            end: `${oldThree.lineno},${oldThree.token}`,
             content: "THREE",
           },
         ],
       })
 
       expect(yield* load(filePath)).toBe("zero\nzero-point-five\none\ntwo\nTHREE\nfour\n")
+      const fresh = displayLines(inserted.metadata.display.text)
+      expect(fresh.find((line) => line.content === "three")?.lineno).toBe(5)
     }),
   )
 
@@ -511,3 +740,119 @@ describe("tool.smaller_edits", () => {
     }),
   )
 })
+
+for (const selection of ["tokenice-cl100k", "tokenice-o200k"] as const) {
+  describe(`tool.smaller_edits ${selection}`, () => {
+    it.instance("reads and edits with tokenice anchors", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filePath = path.join(test.directory, `${selection}-flow.txt`)
+        yield* put(filePath, "alpha\nbeta\ngamma\nomega\n")
+
+        const read = yield* runRead({ filePath }, ctx, selection)
+        const lines = displayLinesFor(selection, fileDisplayText(read.metadata.display))
+        const beta = lines.find((line) => line.content === "beta")!
+
+        expect(beta.token).toMatch(/^[a-z]+$/)
+
+        const firstEdit = yield* runEdit(
+          {
+            filePath,
+            operations: [
+              {
+                kind: "replace_range",
+                start: `${beta.lineno},${beta.token}`,
+                end: `${beta.lineno},${beta.token}`,
+                content: "BETA",
+              },
+            ],
+          },
+          ctx,
+          selection,
+        )
+
+        expect(yield* load(filePath)).toBe("alpha\nBETA\ngamma\nomega\n")
+
+        const refreshed = displayLinesFor(selection, fileDisplayText(firstEdit.metadata.display))
+        const omega = refreshed.find((line) => line.content === "omega")!
+
+        yield* runEdit(
+          {
+            filePath,
+            operations: [
+              {
+                kind: "replace_range",
+                start: `${omega.lineno},${omega.token}`,
+                end: `${omega.lineno},${omega.token}`,
+                content: "OMEGA",
+              },
+            ],
+          },
+          ctx,
+          selection,
+        )
+
+        expect(yield* load(filePath)).toBe("alpha\nBETA\ngamma\nOMEGA\n")
+      }),
+    )
+
+    it.instance("accepts copied tokenice anchors with payload text", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filePath = path.join(test.directory, `${selection}-copied.txt`)
+        yield* put(filePath, "alpha\nbeta\ngamma\n")
+
+        const read = yield* runRead({ filePath }, ctx, selection)
+        const lines = displayLinesFor(selection, fileDisplayText(read.metadata.display))
+        const beta = lines.find((line) => line.content === "beta")!
+
+        yield* runEdit(
+          {
+            filePath,
+            operations: [
+              {
+                kind: "replace_range",
+                start: `${beta.lineno},${beta.token}!${beta.content}`,
+                end: `${beta.lineno},${beta.token}!${beta.content}`,
+                content: "BETA",
+              },
+            ],
+          },
+          ctx,
+          selection,
+        )
+
+        expect(yield* load(filePath)).toBe("alpha\nBETA\ngamma\n")
+      }),
+    )
+
+    it.instance("rejects shortened tokenice anchors", () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const filePath = path.join(test.directory, `${selection}-short.txt`)
+        yield* put(filePath, "alpha\nbeta\ngamma\n")
+
+        const read = yield* runRead({ filePath }, ctx, selection)
+        const lines = displayLinesFor(selection, fileDisplayText(read.metadata.display))
+        const beta = lines.find((line) => line.content === "beta")!
+
+        const err = yield* failEdit(
+          {
+            filePath,
+            operations: [
+              {
+                kind: "replace_range",
+                start: `${beta.lineno},${beta.token.slice(0, -1)}`,
+                end: `${beta.lineno},${beta.token.slice(0, -1)}`,
+                content: "BETA",
+              },
+            ],
+          },
+          selection,
+        )
+
+        expect(err.message).toContain("not available in remembered state")
+      }),
+    )
+  })
+}

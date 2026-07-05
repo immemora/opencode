@@ -1,89 +1,85 @@
-import { createHash } from "node:crypto"
+export type { AnchorMatchResult, LineAnchor, LineAnchorCodec, LineAnchorMorphology, RenderedLine } from "./linehash_iface"
+export { DIGEST_ALPHABET, DIGEST_WIDTH, LineHashB64, MIN_DIGEST_MATCH_WIDTH } from "./linehash_b64"
+export {
+  LineHashTokenice100k,
+  LineHashTokenice200k,
+  makeLineHashTokenice,
+  TOKENICE_FRAGMENT_LIMIT,
+  TOKENICE_SEPARATOR,
+  TOKENICE_WORD_COUNTS,
+  TOKENICE_WORD_TARGET,
+  TOKENICE_WORDS_BY_MODE,
+} from "./linehash_tokenice"
+export type { TokeniceMode } from "./linehash_tokenice"
 
-// Six URL-safe base64 characters carry 36 bits of digest material, which is
-// short enough to copy but wide enough to distinguish repeated nearby lines.
-export const DIGEST_WIDTH = 6
-// RFC 4648 base64url keeps the prefix dense and shell/JSON friendly.
-export const DIGEST_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+import type { AnchorMatchResult, LineAnchor, LineAnchorCodec, LineAnchorMorphology, RenderedLine } from "./linehash_iface"
+import { LineHashB64 } from "./linehash_b64"
+import { LineHashTokenice100k, LineHashTokenice200k } from "./linehash_tokenice"
 
-export type IdentityAnchor = {
-  lineno: number
-  chainHash: string
+export type LineHashName = "b64" | "tokenice-cl100k" | "tokenice-o200k"
+
+export const DEFAULT_LINEHASH = "b64" satisfies LineHashName
+
+// Accepted smaller-edits linehash selectors:
+// - `b64` (default)
+// - `tokenice` (alias for `tokenice-cl100k`)
+// - `tokenice-cl100k`
+// - `tokenice-o200k`
+//
+// Runtime selection reads `OPENCODE_SMALLER_EDITS_LINEHASH` unless an explicit
+// parameter is passed to `lineAnchors(...)`.
+
+const LINEHASH_BY_NAME = {
+  b64: LineHashB64,
+  "tokenice-cl100k": LineHashTokenice100k,
+  "tokenice-o200k": LineHashTokenice200k,
+} satisfies Record<LineHashName, LineAnchorCodec>
+
+export function lineHashName(input: string | undefined): LineHashName {
+  if (!input) return DEFAULT_LINEHASH
+  if (input === "b64") return "b64"
+  if (input === "tokenice") return "tokenice-cl100k"
+  if (input === "tokenice-cl100k") return "tokenice-cl100k"
+  if (input === "tokenice-o200k") return "tokenice-o200k"
+  throw new Error(`Unknown smaller-edits linehash implementation: ${input}`)
 }
 
-export type IdentityLine = IdentityAnchor & {
-  content: string
-  text: string
+export function lineAnchors(selection?: LineHashName | string): LineAnchorCodec {
+  return LINEHASH_BY_NAME[lineHashName(selection ?? process.env.OPENCODE_SMALLER_EDITS_LINEHASH)]
 }
 
-export function canonicalizeLine(content: string) {
-  return content.replaceAll("\r\n", "\n").replaceAll("\r", "\n")
-}
-
-export function hashFirstLine(content: string) {
-  return digest(canonicalizeLine(content))
-}
-
-export function hashNextLine(prevHash: string, content: string) {
-  return digest(prevHash + canonicalizeLine(content))
-}
-
-export function formatIdentityAnchor(lineno: number, chainHash: string) {
-  return `${lineno},${chainHash}`
-}
-
-export function formatIdentityLine(lineno: number, chainHash: string, content: string) {
-  return `${formatIdentityAnchor(lineno, chainHash)}|${content}`
-}
-
-export function parseIdentityAnchor(text: string): IdentityAnchor {
-  const match = text.match(new RegExp(`^(\\d+),([${escapeRegExp(DIGEST_ALPHABET)}]{${DIGEST_WIDTH}})$`))
-  if (!match) throw new Error(`Malformed line identity: ${text}`)
-  const lineno = Number(match[1])
-  if (!Number.isInteger(lineno) || lineno < 1) {
-    throw new Error(`Malformed line identity: ${text}`)
-  }
-  return {
-    lineno,
-    chainHash: match[2]!,
-  }
-}
-
-export function parseIdentityLine(text: string) {
-  const split = text.indexOf("|")
-  if (split === -1) throw new Error(`Malformed identity-prefixed line: ${text}`)
-  const anchor = parseIdentityAnchor(text.slice(0, split))
-  return {
-    ...anchor,
-    content: text.slice(split + 1),
-  }
-}
-
-export function buildIdentityLines(lines: string[], start = 1, end = lines.length) {
-  if (lines.length === 0 || end < start) return [] as IdentityLine[]
-
-  const result: IdentityLine[] = []
-  let prevHash = ""
-  for (let index = 0; index < lines.length; index++) {
-    const lineno = index + 1
-    const chainHash = lineno === 1 ? hashFirstLine(lines[index]!) : hashNextLine(prevHash, lines[index]!)
-    prevHash = chainHash
-    if (lineno < start) continue
-    if (lineno > end) break
-    result.push({
-      lineno,
-      chainHash,
-      content: lines[index]!,
-      text: formatIdentityLine(lineno, chainHash, lines[index]!),
-    })
-  }
-  return result
-}
-
-function digest(input: string) {
-  return createHash("sha256").update(input).digest("base64url").slice(0, DIGEST_WIDTH)
-}
-
-function escapeRegExp(input: string) {
-  return input.replace(/[|\\{}()[\]^$+*?.-]/g, "\\$&")
+export const LineAnchors: LineAnchorCodec = {
+  get name() {
+    return lineAnchors().name
+  },
+  get morphology() {
+    return lineAnchors().morphology
+  },
+  canonicalizeContent(content: string) {
+    return lineAnchors().canonicalizeContent(content)
+  },
+  firstToken(content: string) {
+    return lineAnchors().firstToken(content)
+  },
+  nextToken(prevToken: string, content: string) {
+    return lineAnchors().nextToken(prevToken, content)
+  },
+  formatAnchor(anchor: LineAnchor) {
+    return lineAnchors().formatAnchor(anchor)
+  },
+  formatRenderedLine(line: { lineno: number; token: string; content: string }) {
+    return lineAnchors().formatRenderedLine(line)
+  },
+  parseAnchor(text: string) {
+    return lineAnchors().parseAnchor(text)
+  },
+  parseRenderedLine(text: string) {
+    return lineAnchors().parseRenderedLine(text)
+  },
+  matchAnchorToken(inputToken: string, candidateTokens: ReadonlyArray<string>): AnchorMatchResult {
+    return lineAnchors().matchAnchorToken(inputToken, candidateTokens)
+  },
+  buildRenderedLines(lines: ReadonlyArray<string>, start?: number, end?: number): RenderedLine[] {
+    return lineAnchors().buildRenderedLines(lines, start, end)
+  },
 }

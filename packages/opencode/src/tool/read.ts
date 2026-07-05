@@ -9,7 +9,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
-import { SmallerReadTool } from "./smaller_edits/smalled_read"
+import { SmallerReadTool } from "./smaller_edits/smaller_read"
 import { smallerEditsEnabled } from "./smaller_edits/gate"
 
 const DEFAULT_READ_LIMIT = 2000
@@ -388,4 +388,4 @@ export const ReadTool_default = Tool.define<
 )
 
 
-export const ReadTool = smallerEditsEnabled ? ReadTool_default : SmallerReadTool;
+export const ReadTool = smallerEditsEnabled ? SmallerReadTool : ReadTool_default;

@@ -1,13 +1,14 @@
 Performs sparse-state, identity-anchored edits in files.
 
 Usage:
-- Read the target region first with the experimental smaller `read` tool so the file has remembered `{lineno},{chainHash}|content` identities. This tool fails when an anchor or required span is missing from sparse remembered state.
+- Read the target region first with the experimental smaller `read` tool so the file has remembered line-anchor identities. This tool fails when an anchor or required span is missing from sparse remembered state.
 - Send a non-empty ordered `operations` array. Supported kinds are `replace_range`, `insert_after`, `delete_range`, and `insert_at_start`.
-- Use anchor strings exactly in `{lineno},{chainHash}` format, copied from the identity prefix returned by `read`.
+- Use anchor strings in the active anchor format, copied from the rendered line prefix returned by `read` or by a prior successful `edit`.
 - `replace_range` and `delete_range` require both `start` and `end`, and the full inclusive remembered span between them. If the span crosses an unread gap, re-read that whole window first.
 - `insert_after` requires a remembered `start` anchor line. `insert_at_start` takes only `content` and is the only operation that can create a missing file or populate an empty file.
-- Operation `content` is raw file text joined with `\n`. Do not include identity prefixes in replacement or inserted text.
+- Operation `content` is raw file text joined with `\n`. Do not include rendered anchor prefixes in replacement or inserted text.
 - Batches are validated before writing and overlapping operations are rejected. Split overlapping edits into separate calls.
+- Multiple disjoint edits in the same file are supported in one call. All anchors in a batch resolve against the remembered pre-edit snapshot, and the tool applies the planned edits in a safe order. Do not make one operation depend on identities that would only exist after another operation in the same call; use the returned rendered anchor lines for that follow-up call.
 - The tool revalidates anchors against the live file just before the write. If the file changed on disk or identities are stale, it fails fast and tells you to re-read before retrying.
-- Successful edits return a fresh identity-prefixed window around the changed region. Treat those returned lines as the authoritative continuation surface for follow-up edits there.
+- Successful edits return a fresh rendered-anchor window around the changed region, with updated post-edit anchors. Treat those returned lines as the authoritative continuation surface for follow-up edits there instead of reusing pre-edit anchors.
 - `contextBefore` and `contextAfter` control how much surrounding context is returned after the edit; both default to 2 lines and are capped at 20.

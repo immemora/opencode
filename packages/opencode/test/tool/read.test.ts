@@ -14,7 +14,7 @@ import { LSP } from "@/lsp/lsp"
 import { Permission } from "../../src/permission"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Instruction } from "../../src/session/instruction"
-import { ReadTool } from "../../src/tool/read"
+import { ReadTool_default } from "../../src/tool/read"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
 import { Filesystem } from "@/util/filesystem"
@@ -60,12 +60,12 @@ const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
 const it = testEffect(Layer.mergeAll(readLayer(), testInstanceStoreLayer))
 
 const init = Effect.fn("ReadToolTest.init")(function* () {
-  const info = yield* ReadTool
+  const info = yield* ReadTool_default
   return yield* info.init()
 })
 
 const run = Effect.fn("ReadToolTest.run")(function* (
-  args: Tool.InferParameters<typeof ReadTool>,
+  args: Tool.InferParameters<typeof ReadTool_default>,
   next: Tool.Context = ctx,
 ) {
   const tool = yield* init()
@@ -74,7 +74,7 @@ const run = Effect.fn("ReadToolTest.run")(function* (
 
 const exec = Effect.fn("ReadToolTest.exec")(function* (
   dir: string,
-  args: Tool.InferParameters<typeof ReadTool>,
+  args: Tool.InferParameters<typeof ReadTool_default>,
   next: Tool.Context = ctx,
 ) {
   return yield* provideInstance(dir)(run(args, next))
@@ -82,7 +82,7 @@ const exec = Effect.fn("ReadToolTest.exec")(function* (
 
 const fail = Effect.fn("ReadToolTest.fail")(function* (
   dir: string,
-  args: Tool.InferParameters<typeof ReadTool>,
+  args: Tool.InferParameters<typeof ReadTool_default>,
   next: Tool.Context = ctx,
 ) {
   const exit = yield* exec(dir, args, next).pipe(Effect.exit)

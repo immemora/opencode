@@ -9,8 +9,9 @@ import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "../external-directory"
 import { Instruction } from "../../session/instruction"
 import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
-import { formatIdentityLine, hashFirstLine, hashNextLine } from "./linehash"
+import { lineAnchors } from "./linehash"
 import { Service as SmallerEditsState } from "./state"
+import { snapshotRenderedLines, traceSmallerEdits } from "./trace"
 
 const DEFAULT_READ_LIMIT = 200
 const MAX_READ_LIMIT = 400
@@ -85,6 +86,7 @@ export const SmallerReadTool = Tool.define<
     const lsp = yield* LSP.Service
     const scope = yield* Scope.Scope
     const smallerEditsState = yield* SmallerEditsState
+    const activeLineAnchors = lineAnchors()
 
     const miss = Effect.fn("ReadTool.miss")(function* (filepath: string) {
       const dir = path.dirname(filepath)
@@ -149,7 +151,7 @@ export const SmallerReadTool = Tool.define<
 
     const lines = Effect.fn("ReadTool.lines")(function* (filepath: string, opts: { limit: number; offset: number }) {
       const start = opts.offset - 1
-      const raw: Array<{ content: string; lineno: number; chainHash: string; text: string }> = []
+      const raw: Array<{ content: string; lineno: number; token: string; text: string }> = []
       const flags = { bytes: 0, count: 0, cut: false, more: false, done: false }
 
       // Note: prefer manual TextDecoder over Stream.decodeText — when the source stream
@@ -158,7 +160,7 @@ export const SmallerReadTool = Tool.define<
       // line of the upstream splitLines pipeline) and use a tagged error to stop the
       // upstream file stream as soon as the byte cap is reached.
       const decoder = new TextDecoder("utf-8")
-      let prevHash = ""
+      let prevToken = ""
       yield* fs.stream(filepath).pipe(
         Stream.map((bytes) => decoder.decode(bytes, { stream: true })),
         Stream.splitLines,
@@ -167,8 +169,8 @@ export const SmallerReadTool = Tool.define<
             if (flags.done) return yield* new ReadStop()
             flags.count += 1
             const line = text.length > MAX_LINE_LENGTH ? text.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text
-            const chainHash = flags.count === 1 ? hashFirstLine(line) : hashNextLine(prevHash, line)
-            prevHash = chainHash
+            const token = flags.count === 1 ? activeLineAnchors.firstToken(line) : activeLineAnchors.nextToken(prevToken, line)
+            prevToken = token
             if (flags.count <= start) return
 
             if (raw.length >= opts.limit) {
@@ -176,13 +178,13 @@ export const SmallerReadTool = Tool.define<
               return
             }
 
-            const rendered = formatIdentityLine(flags.count, chainHash, line)
+            const rendered = activeLineAnchors.formatRenderedLine({ lineno: flags.count, token, content: line })
             const size = Buffer.byteLength(rendered, "utf-8") + (raw.length > 0 ? 1 : 0)
             if (flags.bytes + size <= MAX_BYTES) {
               raw.push({
                 content: line,
                 lineno: flags.count,
-                chainHash,
+                token,
                 text: rendered,
               })
               flags.bytes += size
@@ -198,8 +200,8 @@ export const SmallerReadTool = Tool.define<
         Effect.catchTag("ReadStop", () => Effect.void),
       )
 
-       return { raw, count: flags.count, cut: flags.cut, more: flags.more, offset: opts.offset }
-     })
+      return { raw, count: flags.count, cut: flags.cut, more: flags.more, offset: opts.offset }
+    })
 
     const isBinaryFile = (filepath: string, bytes: Uint8Array) => {
       const ext = path.extname(filepath).toLowerCase()
@@ -357,11 +359,33 @@ export const SmallerReadTool = Tool.define<
       const limit = resolveReadLimit(params.limit)
       const note = limitNote(params.limit, limit)
       const file = yield* lines(filepath, { limit, offset: params.offset || 1 })
+      const traceContext = {
+        sessionID: ctx.sessionID,
+        messageID: ctx.messageID,
+        callID: ctx.callID,
+        filePath: filepath,
+      }
       if (file.count < file.offset && !(file.count === 0 && file.offset === 1)) {
         return yield* Effect.fail(
           new Error(`Offset ${file.offset} is out of range for this file (${file.count} lines)`),
         )
       }
+
+      const last = file.offset + file.raw.length - 1
+      traceSmallerEdits(
+        "read.window",
+        {
+          offset: file.offset,
+          limit,
+          totalLines: file.count,
+          returnedLineStart: file.raw[0]?.lineno,
+          returnedLineEnd: file.raw[file.raw.length - 1]?.lineno,
+          more: file.more,
+          cut: file.cut,
+          lines: snapshotRenderedLines(file.raw),
+        },
+        traceContext,
+      )
 
       if (file.raw.length > 0) {
         yield* smallerEditsState.replaceWindowLines({
@@ -372,7 +396,7 @@ export const SmallerReadTool = Tool.define<
             _tag: "line" as const,
             fileno: line.lineno,
             orig_fileno: line.lineno,
-            chainHash: line.chainHash,
+            token: line.token,
             content: line.content,
           })),
         })
@@ -386,13 +410,12 @@ export const SmallerReadTool = Tool.define<
       ].join("\n")
       output += file.raw.map((line) => line.text).join("\n")
 
-      const last = file.offset + file.raw.length - 1
       const next = last + 1
       const truncated = file.more || file.cut
       if (file.cut) {
-        output += `\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing identity-prefixed lines ${file.offset}-${last}. Use offset=${next} to continue.)`
+        output += `\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing ${activeLineAnchors.morphology.lineLabel}s ${file.offset}-${last}. Use offset=${next} to continue.)`
       } else if (file.more) {
-        output += `\n\n(Showing identity-prefixed lines ${file.offset}-${last} of ${file.count}. Use offset=${next} to continue.)`
+        output += `\n\n(Showing ${activeLineAnchors.morphology.lineLabel}s ${file.offset}-${last} of ${file.count}. Use offset=${next} to continue.)`
       } else {
         output += `\n\n(End of file - total ${file.count} lines)`
       }
@@ -400,6 +423,18 @@ export const SmallerReadTool = Tool.define<
       if (note) output += `\n${note}`
 
       yield* warm(filepath)
+      traceSmallerEdits(
+        "read.return",
+        {
+          offset: file.offset,
+          limit,
+          lineStart: file.offset,
+          lineEnd: last,
+          totalLines: file.count,
+          truncated,
+        },
+        traceContext,
+      )
 
       if (loaded.length > 0) {
         output += `\n\n<system-reminder>\n${loaded.map((item) => item.content).join("\n\n")}\n</system-reminder>`
@@ -426,10 +461,20 @@ export const SmallerReadTool = Tool.define<
     })
 
     return {
-      description: DESCRIPTION,
-      parameters: Parameters,
-      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
-        run(params, ctx).pipe(Effect.orDie),
-    }
-  }),
+        description: descriptionWithMorphology(activeLineAnchors),
+        parameters: Parameters,
+        execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
+          run(params, ctx).pipe(Effect.orDie),
+      }
+    }),
 )
+
+function descriptionWithMorphology(activeLineAnchors: ReturnType<typeof lineAnchors>) {
+  return [
+    DESCRIPTION,
+    "",
+    `Active ${activeLineAnchors.morphology.lineLabel} format: ${activeLineAnchors.morphology.renderedLineFormatDescription}.`,
+    `Active ${activeLineAnchors.morphology.anchorLabel} format: ${activeLineAnchors.morphology.anchorFormatDescription}.`,
+    activeLineAnchors.morphology.followupGuidance,
+  ].join("\n")
+}

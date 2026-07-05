@@ -1,6 +1,5 @@
-import { ExperimentalGate } from "@/immemora";
-import { truthy } from "@opencode-ai/core/flag/flag";
+import { ExperimentalGate } from "@/immemora"
+import { truthy } from "@opencode-ai/core/flag/flag"
 
-export const smallerEditsEnabled = 
-    ExperimentalGate.isFeatureEnabled("smaller_edits") || 
-    truthy(process.env.OPENCODE_SMALLER_EDITS_ENABLED ?? "")
+export const smallerEditsEnabled =
+  ExperimentalGate.isFeatureEnabled("smaller_edits") || truthy("OPENCODE_SMALLER_EDITS_ENABLED")
